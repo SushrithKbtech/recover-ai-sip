@@ -1,6 +1,10 @@
 import type { ChatResponse } from "./types";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+// Trailing slashes are easy to leave on a deployment env var, and would build
+// request paths like `//api/chat`, which FastAPI does not route.
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
+).replace(/\/+$/, "");
 
 export async function sendChatMessage(
   sessionId: string,
