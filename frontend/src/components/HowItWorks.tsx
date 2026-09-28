@@ -1,11 +1,11 @@
 const steps = [
   {
     t: "You describe it",
-    d: "“What if I pause my SIP for 6 months to pay off my loan faster?” — no forms, no dropdowns.",
+    d: "“Pause my SIP for 6 months to pay off my loan faster?” No forms, no dropdowns.",
   },
   {
     t: "It asks what's missing",
-    d: "Only the numbers it actually needs — your loan rate, say — and only if you didn't already give them.",
+    d: "Only the numbers it actually needs, and only if you didn't already give them.",
   },
   {
     t: "The math runs, not the model",
@@ -21,8 +21,7 @@ export default function HowItWorks() {
   return (
     <section id="how-it-works" className="border-b border-line py-24 sm:py-28">
       <div className="mx-auto max-w-6xl px-6 sm:px-10">
-        <p className="text-[10px] uppercase tracking-[0.2em] text-accent">From question to answer</p>
-        <h2 className="mt-3 max-w-xl font-display text-3xl leading-tight sm:text-[2.4rem]">
+        <h2 className="max-w-xl font-display text-3xl leading-tight sm:text-[2.4rem]">
           Four steps. No spreadsheet required.
         </h2>
 

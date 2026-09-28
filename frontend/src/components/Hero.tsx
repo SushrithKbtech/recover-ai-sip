@@ -31,7 +31,7 @@ export default function Hero({ onTry }: Props) {
         }}
       />
 
-      <div className="relative mx-auto grid max-w-6xl items-center gap-16 px-6 py-24 sm:px-10 sm:py-32 lg:grid-cols-[1.1fr_0.9fr] lg:text-left">
+      <div className="relative mx-auto grid max-w-6xl items-center gap-16 px-6 pb-24 pt-20 sm:px-10 sm:pb-28 sm:pt-24 lg:grid-cols-[1.1fr_0.9fr] lg:text-left">
         <div className="text-center lg:text-left">
           <div className="animate-fade-up" style={{ animationDelay: "60ms" }}>
             <span className="inline-flex items-center gap-2.5 rounded-full border border-line-strong bg-black/25 px-4 py-1.5 text-[10px] uppercase tracking-[0.2em] text-muted backdrop-blur-sm">
@@ -49,16 +49,15 @@ export default function Hero({ onTry }: Props) {
           >
             Know the number
             <br />
-            <span className="warm-text italic">before you decide.</span>
+            <span className="warm-text font-semibold">before you decide.</span>
           </h1>
 
           <p
             className="animate-fade-up mx-auto mt-7 max-w-xl text-[15px] leading-relaxed text-muted sm:text-lg lg:mx-0"
             style={{ animationDelay: "280ms" }}
           >
-            Describe a money decision in plain language. An LLM agent routes it to the right
-            calculator and asks only for what's missing — then a deterministic engine runs the
-            actual math, so every number you see was computed, never guessed.
+            Describe a money decision in plain language. The agent asks what's missing,
+            then hands the math to deterministic code.
           </p>
 
           <div

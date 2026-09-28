@@ -10,7 +10,7 @@ export default function SiteNav() {
         <a href="#top" onClick={scrollTo("top")} className="font-display text-lg tracking-tight text-foreground">
           Recover<span className="text-accent">AI</span>
         </a>
-        <nav className="hidden items-center gap-8 text-sm text-muted sm:flex">
+        <nav className="hidden items-center gap-8 text-sm text-muted lg:flex">
           <a href="#how-it-works" onClick={scrollTo("how-it-works")} className="link-wipe hover:text-foreground">
             How it works
           </a>
@@ -26,7 +26,7 @@ export default function SiteNav() {
           onClick={scrollTo("console")}
           className="btn-primary rounded-sm px-4 py-2 text-xs font-semibold tracking-wide"
         >
-          Try it
+          Try a scenario
         </a>
       </div>
     </header>

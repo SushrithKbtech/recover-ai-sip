@@ -73,8 +73,7 @@ export default function App() {
         <section id="console" className="py-24 sm:py-28">
           <div className="mx-auto max-w-3xl px-6 sm:px-10">
             <div className="text-center">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-accent">Run it yourself</p>
-              <h2 className="mt-3 font-display text-3xl leading-tight sm:text-[2.4rem]">
+              <h2 className="font-display text-3xl leading-tight sm:text-[2.4rem]">
                 Describe your scenario.
               </h2>
               <p className="mx-auto mt-4 max-w-lg text-[15px] leading-relaxed text-muted">
