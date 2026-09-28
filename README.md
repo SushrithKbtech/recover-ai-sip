@@ -269,9 +269,16 @@ Interactive OpenAPI docs are served by FastAPI at `/docs`, with the raw schema a
   `backend/render.yaml` is a ready-to-use Render blueprint. Set `OPENAI_API_KEY`,
   `CORS_ORIGINS` (your Vercel domain), and `DATABASE_URL` as env vars on whichever platform
   you use.
-- **Database:** any managed MySQL works (Railway MySQL, PlanetScale, Amazon RDS). Point
-  `DATABASE_URL` at it in the form
-  `mysql+pymysql://user:password@host:3306/recoverai?charset=utf8mb4`.
+- **Database:** any managed MySQL works (Aiven, Railway, Amazon RDS). Note that Render
+  itself offers only Postgres and Key Value, so on Render the database has to come from
+  elsewhere. Point `DATABASE_URL` at it in the form
+  `mysql+pymysql://user:password@host:3306/recoverai?charset=utf8mb4`. A bare `mysql://`
+  URL from the provider is accepted too and is rewritten to use PyMySQL.
+- **Database TLS:** managed providers usually require TLS. Append `ssl_ca` to the
+  connection string and SQLAlchemy passes it through to PyMySQL, so no code change is
+  needed:
+  `...?charset=utf8mb4&ssl_ca=/etc/secrets/ca.pem`. On Render, upload the provider's CA
+  certificate as a Secret File, which lands in `/etc/secrets/`.
 
 ## Example walkthroughs
 
