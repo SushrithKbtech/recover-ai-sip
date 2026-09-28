@@ -15,11 +15,20 @@ class Base(DeclarativeBase):
     pass
 
 
+def _database_url() -> str:
+    url = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+    # Managed MySQL providers (Railway, Aiven) hand out bare `mysql://` URLs,
+    # which SQLAlchemy cannot resolve to a driver. Pin them to PyMySQL.
+    if url.startswith("mysql://"):
+        url = "mysql+pymysql://" + url[len("mysql://") :]
+    return url
+
+
 # pool_recycle sits below MySQL's default 8h wait_timeout so connections that
 # idled long enough for the server to drop them are replaced before reuse,
 # instead of surfacing as "MySQL server has gone away" mid-request.
 engine = create_engine(
-    os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL),
+    _database_url(),
     pool_pre_ping=True,
     pool_recycle=3600,
     pool_size=5,
