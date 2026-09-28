@@ -1,14 +1,31 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
+from app import repository
+from app.db import SessionLocal, engine, init_db
 from app.graph import get_graph
-from app.schemas import ChatRequest, ChatResponse, ResultPayload
+from app.schemas import (
+    ChatRequest,
+    ChatResponse,
+    ResultPayload,
+    SessionHistoryResponse,
+    StatsResponse,
+)
 
-app = FastAPI(title="RecoverAI API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="RecoverAI API", lifespan=lifespan)
 
 _origins_env = os.environ.get("CORS_ORIGINS", "http://localhost:5173")
 _origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
@@ -21,14 +38,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory session store: session_id -> partial graph state.
-# No database required for this project's scope.
-_sessions: dict[str, dict] = {}
-
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    return {"status": "ok", "database": "ok"}
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -36,62 +51,70 @@ def chat(req: ChatRequest):
     if not req.message or not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
 
-    session = _sessions.get(req.session_id)
-    if session is None:
-        session = {
-            "messages": [],
-            "scenario": None,
-            "params": None,
-            "missing_fields": [],
-            "calculator_result": None,
-            "calculator_error": None,
-            "final_explanation": None,
-            "assumptions": [],
-            "awaiting_clarification": False,
-            "clarifying_question": None,
-        }
+    with SessionLocal.begin() as db:
+        state = repository.load_state(db, req.session_id)
 
-    session["messages"].append({"role": "user", "content": req.message})
-    # Reset per-turn fields; conversation history (messages, and previously
-    # extracted params/scenario) carries forward so intent_parser can merge
-    # new info with what it already knows.
-    session["clarifying_question"] = None
-    session["calculator_error"] = None
+    state["messages"].append({"role": "user", "content": req.message})
 
-    graph = get_graph()
-    result_state = graph.invoke(session)
-    _sessions[req.session_id] = result_state
+    # Run the graph outside any transaction: these are multi-second LLM calls
+    # and holding a pooled connection across them would starve the pool.
+    result_state = get_graph().invoke(state)
 
     if result_state.get("clarifying_question"):
-        question = result_state["clarifying_question"]
-        result_state["messages"].append({"role": "assistant", "content": question})
-        return ChatResponse(
+        reply = result_state["clarifying_question"]
+        response = ChatResponse(
             session_id=req.session_id,
             type="clarifying_question",
-            message=question,
+            message=reply,
             result=None,
         )
-
-    if result_state.get("final_explanation"):
-        explanation = result_state["final_explanation"]
-        lead_in = "Here's how those two scenarios compare:"
-        result_state["messages"].append({"role": "assistant", "content": lead_in})
-        return ChatResponse(
+    elif result_state.get("final_explanation"):
+        reply = "Here's how those two scenarios compare:"
+        response = ChatResponse(
             session_id=req.session_id,
             type="result",
-            message=lead_in,
+            message=reply,
             result=ResultPayload(
                 scenario=result_state["scenario"],
                 calculator_output=result_state["calculator_result"],
-                explanation=explanation,
+                explanation=result_state["final_explanation"],
                 assumptions=result_state.get("assumptions", []),
             ),
         )
+    else:
+        reply = "Something went wrong processing that request. Please try rephrasing."
+        response = ChatResponse(
+            session_id=req.session_id,
+            type="error",
+            message=reply,
+            result=None,
+        )
 
-    # Should not normally happen; fail safe rather than crash.
-    return ChatResponse(
-        session_id=req.session_id,
-        type="error",
-        message="Something went wrong processing that request. Please try rephrasing.",
-        result=None,
-    )
+    with SessionLocal.begin() as db:
+        repository.persist_turn(db, req.session_id, result_state, req.message, reply)
+
+    return response
+
+
+@app.get("/api/sessions/{session_id}/history", response_model=SessionHistoryResponse)
+def session_history(session_id: str):
+    with SessionLocal.begin() as db:
+        session = repository.get_session(db, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="session not found")
+
+        return SessionHistoryResponse(
+            session_id=session.id,
+            scenario=session.scenario,
+            awaiting_clarification=session.awaiting_clarification,
+            created_at=session.created_at,
+            updated_at=session.updated_at,
+            messages=repository.get_messages(db, session_id),
+            computations=repository.get_computations(db, session_id),
+        )
+
+
+@app.get("/api/stats", response_model=StatsResponse)
+def stats():
+    with SessionLocal.begin() as db:
+        return repository.scenario_stats(db)

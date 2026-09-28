@@ -1,9 +1,10 @@
 """Pydantic schemas for API I/O and structured LLM output."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 Scenario = Literal[
     "sip_pause_vs_loan_payoff",
@@ -30,6 +31,47 @@ class ChatResponse(BaseModel):
     type: Literal["clarifying_question", "result", "error"]
     message: str
     result: Optional[ResultPayload] = None
+
+
+# --- Persisted history and analytics ---
+
+class HistoryMessage(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    role: str
+    content: str
+    created_at: datetime
+
+
+class HistoryComputation(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    scenario: str
+    params: dict
+    result: dict
+    created_at: datetime
+
+
+class SessionHistoryResponse(BaseModel):
+    session_id: str
+    scenario: Optional[str] = None
+    awaiting_clarification: bool
+    created_at: datetime
+    updated_at: datetime
+    messages: list[HistoryMessage]
+    computations: list[HistoryComputation]
+
+
+class ScenarioStat(BaseModel):
+    scenario: str
+    runs: int
+    last_run_at: datetime
+
+
+class StatsResponse(BaseModel):
+    total_sessions: int
+    total_computations: int
+    by_scenario: list[ScenarioStat]
 
 
 # --- Structured output schema the LLM must fill in for intent_parser ---

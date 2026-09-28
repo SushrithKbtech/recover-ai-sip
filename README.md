@@ -43,9 +43,11 @@ flowchart TD
 ```
 
 Because `/api/chat` is a stateless request/response endpoint, the `clarify -> intent_parser`
-loop happens *across* HTTP calls: each session's message history is kept server-side
-(in-memory dict keyed by `session_id`), and every new user message re-invokes the graph
-from `intent_parser` with the full accumulated conversation.
+loop happens *across* HTTP calls: each session's transcript is persisted in MySQL keyed by
+`session_id`, and every new user message re-invokes the graph from `intent_parser` with the
+full accumulated conversation. Because state lives in the database rather than in process
+memory, a session survives a backend restart and can be resumed by any instance, so the API
+can be scaled horizontally.
 
 ### Nodes
 
@@ -57,18 +59,62 @@ from `intent_parser` with the full accumulated conversation.
 | `explainer` | Yes | Turns calculator output into a plain-language summary; system prompt forbids inventing numbers |
 | `out_of_scope` | No | Returns a fixed explanation of what RecoverAI can and can't do |
 
+## Persistence (MySQL)
+
+Conversation state, transcripts, and every completed calculation are stored in MySQL via
+SQLAlchemy. The graph itself stays storage-agnostic: it takes a state dict and returns one,
+and `app/repository.py` is the only module that knows about rows.
+
+### Schema
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `chat_sessions` | One row per conversation; holds the durable slice of graph state | `id` (PK, session id), `scenario`, `params` (JSON), `missing_fields` (JSON), `awaiting_clarification`, `created_at`, `updated_at` |
+| `messages` | Full transcript, replayed into the graph each turn | `id` (PK), `session_id` (FK, cascade), `role`, `content`, `created_at` |
+| `computations` | Every completed calculator run, for history and analytics | `id` (PK), `session_id` (FK, cascade), `scenario`, `params` (JSON), `result` (JSON), `created_at` |
+
+Both child tables cascade on delete, so removing a session removes its transcript and
+calculation history in one statement.
+
+### Indexing and connection handling
+
+- `ix_messages_session_id_id` is a composite on `(session_id, id)`. Every turn re-reads one
+  session's entire transcript in insertion order, which is the hot read path, and the
+  composite lets that run as a single range scan instead of a filter plus sort.
+- `ix_computations_scenario_created_at` covers the scenario analytics aggregate behind
+  `/api/stats`.
+- `chat_sessions.updated_at` is indexed so stale sessions can be swept by age.
+- The engine sets `pool_recycle=3600`, below MySQL's default 8 hour `wait_timeout`, so
+  connections idle long enough to be dropped server side are replaced before reuse rather
+  than failing mid request with "MySQL server has gone away". `pool_pre_ping` catches the
+  rest.
+- `/api/chat` deliberately does **not** hold a connection across the LLM calls. It opens a
+  short transaction to load state, closes it, runs the graph, then opens a second short
+  transaction to write the turn. Holding a pooled connection across multi-second model
+  latency would exhaust the pool under concurrency.
+- The connection string uses `utf8mb4`, which is required here: amounts are rendered with
+  the rupee sign, and MySQL's legacy 3 byte `utf8` cannot store it.
+
+The driver is PyMySQL, which is pure Python, so the Docker image needs no MySQL client
+system libraries.
+
 ## Project layout
 
 ```
 recoverai/
+  docker-compose.yml     # local MySQL 8 for development
   backend/
     app/
       calculators.py   # pure, deterministic, unit-testable math (no LLM)
       graph.py          # LangGraph StateGraph + nodes + conditional edges
       schemas.py        # Pydantic models: API I/O + structured LLM output
-      main.py            # FastAPI app, in-memory session store, /api/chat, /api/health
+      db.py             # SQLAlchemy engine, pooling config, session factory
+      models.py         # ORM models: chat_sessions, messages, computations
+      repository.py     # state <-> rows, transcript reads, scenario analytics
+      main.py            # FastAPI app, routes
     tests/
       test_calculators.py
+      test_repository.py   # integration tests against a real MySQL
     requirements.txt
     Dockerfile
     render.yaml
@@ -85,6 +131,25 @@ recoverai/
     .env.example
 ```
 
+## Setup — database
+
+Start a local MySQL 8 with Docker:
+
+```bash
+docker compose up -d mysql
+```
+
+Or, against an existing MySQL server, create the database and user once:
+
+```sql
+CREATE DATABASE recoverai CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'recoverai'@'localhost' IDENTIFIED BY 'recoverai';
+GRANT ALL PRIVILEGES ON recoverai.* TO 'recoverai'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+Tables are created automatically on backend startup.
+
 ## Setup — backend
 
 ```bash
@@ -92,11 +157,18 @@ cd backend
 python -m venv .venv
 ./.venv/Scripts/activate   # Windows; use `source .venv/bin/activate` on macOS/Linux
 pip install -r requirements.txt
-cp .env.example .env       # then fill in OPENAI_API_KEY
+cp .env.example .env       # then fill in OPENAI_API_KEY and DATABASE_URL
 uvicorn app.main:app --reload --port 8000
 ```
 
-Run the calculator unit tests (no API key needed — this module has no LLM calls):
+Run the calculator unit tests (no API key or database needed — this module has no LLM calls):
+
+```bash
+pytest tests/test_calculators.py -q
+```
+
+Run everything including the MySQL integration tests (these skip automatically if
+`DATABASE_URL` is unreachable):
 
 ```bash
 pytest tests/ -q
@@ -140,15 +212,66 @@ Open `http://localhost:5173`.
 If `type` is `"clarifying_question"`, `result` is `null` — POST again with the same
 `session_id` and the user's answer to continue the conversation.
 
-`GET /api/health` — returns `{"status": "ok"}`.
+`GET /api/sessions/{session_id}/history`
+
+Returns the stored transcript and every calculation run in that session. `404` if the
+session id has never been seen.
+
+```json
+{
+  "session_id": "uuid-string",
+  "scenario": "opportunity_cost",
+  "awaiting_clarification": false,
+  "created_at": "2026-09-28T10:14:02",
+  "updated_at": "2026-09-28T10:15:47",
+  "messages": [
+    { "role": "user", "content": "...", "created_at": "2026-09-28T10:14:02" },
+    { "role": "assistant", "content": "...", "created_at": "2026-09-28T10:14:09" }
+  ],
+  "computations": [
+    {
+      "scenario": "opportunity_cost",
+      "params": { "...": "extracted inputs" },
+      "result": { "...": "raw calculator output" },
+      "created_at": "2026-09-28T10:15:47"
+    }
+  ]
+}
+```
+
+`GET /api/stats`
+
+Scenario usage aggregated in SQL (`GROUP BY scenario`), not in Python.
+
+```json
+{
+  "total_sessions": 128,
+  "total_computations": 94,
+  "by_scenario": [
+    { "scenario": "emi_comparison", "runs": 51, "last_run_at": "2026-09-28T10:15:47" },
+    { "scenario": "opportunity_cost", "runs": 43, "last_run_at": "2026-09-28T09:02:11" }
+  ]
+}
+```
+
+`GET /api/health` — returns `{"status": "ok", "database": "ok"}`, and fails if the
+database is unreachable, so a platform health check catches a broken DB connection rather
+than reporting a healthy process in front of a dead dependency.
+
+Interactive OpenAPI docs are served by FastAPI at `/docs`, with the raw schema at
+`/openapi.json`.
 
 ## Deployment
 
 - **Frontend (Vercel):** `frontend/vercel.json` handles SPA routing. Set
   `VITE_API_BASE_URL` to your deployed backend URL in Vercel's project env vars.
 - **Backend (Render or Railway):** `backend/Dockerfile` builds the FastAPI app;
-  `backend/render.yaml` is a ready-to-use Render blueprint. Set `OPENAI_API_KEY` and
-  `CORS_ORIGINS` (your Vercel domain) as env vars on whichever platform you use.
+  `backend/render.yaml` is a ready-to-use Render blueprint. Set `OPENAI_API_KEY`,
+  `CORS_ORIGINS` (your Vercel domain), and `DATABASE_URL` as env vars on whichever platform
+  you use.
+- **Database:** any managed MySQL works (Railway MySQL, PlanetScale, Amazon RDS). Point
+  `DATABASE_URL` at it in the form
+  `mysql+pymysql://user:password@host:3306/recoverai?charset=utf8mb4`.
 
 ## Example walkthroughs
 
@@ -230,6 +353,6 @@ enforced in `EXPLAINER_SYSTEM_PROMPT` in `backend/app/graph.py`, not left to cha
 
 ## Non-goals
 
-No auth, no database (sessions are in-memory and reset on backend restart), no scenarios
-beyond the 3 above, no tax-law-specific calculations (called out as an assumption
-instead), no real bank/investment API integrations.
+No auth (sessions are identified by an unguessable client-generated id, not owned by a
+user account), no scenarios beyond the 3 above, no tax-law-specific calculations (called
+out as an assumption instead), no real bank/investment API integrations.

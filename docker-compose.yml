@@ -1,0 +1,25 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: recoverai-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: recoverai
+      MYSQL_USER: recoverai
+      MYSQL_PASSWORD: recoverai
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    # Host port is overridable: a machine with MySQL already installed is
+    # usually holding 3306 already. Set MYSQL_HOST_PORT=3307 in that case.
+    ports:
+      - "${MYSQL_HOST_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mysql_data:
